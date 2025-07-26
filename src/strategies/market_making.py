@@ -479,20 +479,44 @@ class AdvancedMarketMaker:
             # Use AI analysis for market making - higher tokens for reasoning models
             response = await self.xai_client.get_completion(
                 prompt, 
-                max_tokens=1500,  # Higher for reasoning models like grok-4
+                max_tokens=3000,  # Higher for reasoning models like grok-4
                 temperature=0.1   # Lower for consistency
             )
             
-            if response and isinstance(response, dict) and 'probability' in response:
-                # Validate the response
-                probability = response.get('probability')
-                confidence = response.get('confidence')
+            # Check if AI response is None (API exhausted or failed)
+            if response is None:
+                self.logger.info(f"AI analysis unavailable for {market.market_id} due to API limits, using conservative defaults")
+                return {
+                    'probability': 0.5,  # Neutral probability
+                    'confidence': 0.2,   # Low confidence
+                    'volatility_factors': "API unavailable",
+                    'stability': 0.3     # Low stability estimate
+                }
+            
+            # Try to parse JSON response
+            try:
+                import json
+                import re
                 
-                if (isinstance(probability, (int, float)) and 0 <= probability <= 1 and
-                    isinstance(confidence, (int, float)) and 0 <= confidence <= 1):
-                    return response
-                else:
-                    self.logger.warning(f"Invalid AI response format for {market.market_id}")
+                # Try to extract JSON from the response
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                    parsed_response = json.loads(json_str)
+                    
+                    if isinstance(parsed_response, dict) and 'probability' in parsed_response:
+                        # Validate the response
+                        probability = parsed_response.get('probability')
+                        confidence = parsed_response.get('confidence')
+                        
+                        if (isinstance(probability, (int, float)) and 0 <= probability <= 1 and
+                            isinstance(confidence, (int, float)) and 0 <= confidence <= 1):
+                            return parsed_response
+                        else:
+                            self.logger.warning(f"Invalid AI response format for {market.market_id}")
+                    
+            except (json.JSONDecodeError, ValueError) as e:
+                self.logger.warning(f"Failed to parse AI response for {market.market_id}: {e}")
             
             # If AI analysis fails, provide conservative defaults
             self.logger.warning(f"AI analysis failed for {market.market_id}, using conservative defaults")

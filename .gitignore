@@ -171,9 +171,27 @@ Desktop.ini
 # Performance analysis files
 performance_analysis_*.json
 performance_analysis_report.json
+performance_analysis_*.txt
+performance_analysis_*.log
 
 # Grok analysis files
 grok4_full_analysis.txt
+grok4_analysis_*.txt
+grok4_analysis_*.json
+
+# Test database files
+test_*.db
+e2e_test_*.db
+*_test.db
+
+# Temporary analysis files
+*_analysis_*.json
+*_analysis_*.txt
+*_analysis_*.log
+
+# Dashboard temporary files
+dashboard_*.log
+dashboard_*.json
 
 # Cursor IDE
 .cursor/

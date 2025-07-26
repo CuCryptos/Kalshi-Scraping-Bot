@@ -8,7 +8,9 @@ import json
 import time
 from typing import Dict, List, Optional, Any, Union, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+import pickle
+import os
 
 import re
 from json_repair import repair_json
@@ -29,6 +31,17 @@ class TradingDecision:
     side: str    # "yes", "no"
     confidence: float  # 0.0 to 1.0
     limit_price: Optional[int] = None # The limit price for the order in cents.
+
+
+@dataclass
+class DailyUsageTracker:
+    """Track daily AI usage and costs."""
+    date: str
+    total_cost: float = 0.0
+    request_count: int = 0
+    daily_limit: float = 50.0  # Default $50 daily limit
+    is_exhausted: bool = False
+    last_exhausted_time: Optional[datetime] = None
 
 
 class XAIClient(TradingLoggerMixin):
@@ -61,11 +74,142 @@ class XAIClient(TradingLoggerMixin):
         self.total_cost = 0.0
         self.request_count = 0
         
+        # Daily usage tracking
+        self.daily_tracker = self._load_daily_tracker()
+        self.usage_file = "logs/daily_ai_usage.pkl"
+        
+        # API exhaustion state
+        self.is_api_exhausted = False
+        self.api_exhausted_until = None
+        
         self.logger.info(
             "xAI client initialized",
             primary_model=self.primary_model,
-            logging_enabled=bool(db_manager)
+            logging_enabled=bool(db_manager),
+            daily_limit=self.daily_tracker.daily_limit,
+            today_cost=self.daily_tracker.total_cost,
+            today_requests=self.daily_tracker.request_count
         )
+
+    def _load_daily_tracker(self) -> DailyUsageTracker:
+        """Load or create daily usage tracker."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        usage_file = "logs/daily_ai_usage.pkl"
+        
+        # Ensure logs directory exists
+        os.makedirs("logs", exist_ok=True)
+        
+        try:
+            if os.path.exists(usage_file):
+                with open(usage_file, 'rb') as f:
+                    tracker = pickle.load(f)
+                    
+                # Reset if new day
+                if tracker.date != today:
+                    tracker = DailyUsageTracker(
+                        date=today,
+                        daily_limit=tracker.daily_limit  # Keep same limit
+                    )
+                return tracker
+        except Exception as e:
+            self.logger.warning(f"Failed to load daily tracker: {e}")
+        
+        # Create new tracker
+        daily_limit = getattr(settings.trading, 'daily_ai_cost_limit', 50.0)
+        return DailyUsageTracker(date=today, daily_limit=daily_limit)
+
+    def _save_daily_tracker(self):
+        """Save daily usage tracker to disk."""
+        try:
+            os.makedirs("logs", exist_ok=True)
+            with open(self.usage_file, 'wb') as f:
+                pickle.dump(self.daily_tracker, f)
+        except Exception as e:
+            self.logger.error(f"Failed to save daily tracker: {e}")
+
+    def _update_daily_cost(self, cost: float):
+        """Update daily cost tracking."""
+        self.daily_tracker.total_cost += cost
+        self.daily_tracker.request_count += 1
+        self._save_daily_tracker()
+        
+        # Check if we've hit daily limit
+        if self.daily_tracker.total_cost >= self.daily_tracker.daily_limit:
+            self.daily_tracker.is_exhausted = True
+            self.daily_tracker.last_exhausted_time = datetime.now()
+            self._save_daily_tracker()
+            
+            self.logger.warning(
+                "Daily AI cost limit reached! Trading paused until tomorrow.",
+                daily_cost=self.daily_tracker.total_cost,
+                daily_limit=self.daily_tracker.daily_limit,
+                requests_today=self.daily_tracker.request_count
+            )
+
+    async def _check_daily_limits(self) -> bool:
+        """
+        Check if we should pause due to daily limits.
+        Returns True if we can proceed, False if we should sleep.
+        """
+        # Reload tracker to get latest state
+        self.daily_tracker = self._load_daily_tracker()
+        
+        if self.daily_tracker.is_exhausted:
+            now = datetime.now()
+            
+            # Check if it's a new day
+            if self.daily_tracker.date != now.strftime("%Y-%m-%d"):
+                # New day - reset tracker
+                self.daily_tracker = DailyUsageTracker(
+                    date=now.strftime("%Y-%m-%d"),
+                    daily_limit=self.daily_tracker.daily_limit
+                )
+                self._save_daily_tracker()
+                
+                self.logger.info(
+                    "New day - daily AI limits reset",
+                    daily_limit=self.daily_tracker.daily_limit
+                )
+                return True
+            
+            # Still the same day and exhausted
+            self.logger.info(
+                "Daily AI limit reached - request skipped",
+                daily_cost=self.daily_tracker.total_cost,
+                daily_limit=self.daily_tracker.daily_limit
+            )
+            return False
+        
+        return True
+
+    async def _handle_resource_exhausted_error(self, error_msg: str):
+        """Handle xAI API resource exhausted errors."""
+        self.logger.error(
+            "xAI API credits exhausted",
+            error_details=error_msg,
+            daily_cost=self.daily_tracker.total_cost,
+            requests_today=self.daily_tracker.request_count
+        )
+        
+        # Mark API as exhausted
+        self.is_api_exhausted = True
+        self.api_exhausted_until = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + \
+                                  timedelta(days=1)  # Next day at midnight
+        
+        # Also mark daily tracker as exhausted
+        self.daily_tracker.is_exhausted = True
+        self.daily_tracker.last_exhausted_time = datetime.now()
+        self._save_daily_tracker()
+
+    def _is_resource_exhausted_error(self, error: Exception) -> bool:
+        """Check if error is due to resource exhaustion."""
+        error_str = str(error).lower()
+        return any(indicator in error_str for indicator in [
+            "resource_exhausted",
+            "credits",
+            "spending limit",
+            "quota"
+        ])
 
     async def _log_query(
         self,
@@ -140,7 +284,7 @@ class XAIClient(TradingLoggerMixin):
                     return_citations=True,  # Get source citations
                 ),
                 temperature=0.3,  # Lower temperature for more factual responses
-                max_tokens=min(800, self.max_tokens)  # Reasonable limit for search
+                max_tokens=min(2000, self.max_tokens)  # Higher limit for search
             )
             
             # Create focused search prompt
@@ -542,11 +686,26 @@ Required format:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_retries: int = 3
-    ) -> Tuple[str, float]:
+    ) -> Tuple[Optional[str], float]:
         """
         Make a completion request with cost tracking and fallback model logic.
         Uses the official xAI SDK pattern from docs.
         """
+        # Check daily limits first
+        if not await self._check_daily_limits():
+            return None, 0.0
+        
+        # Check if API is exhausted from previous errors
+        if self.is_api_exhausted:
+            now = datetime.now()
+            if self.api_exhausted_until and now < self.api_exhausted_until:
+                self.logger.info("API exhausted - skipping request until reset")
+                return None, 0.0
+            else:
+                # Reset exhaustion state - new day
+                self.is_api_exhausted = False
+                self.api_exhausted_until = None
+        
         model_to_use = model or self.primary_model
         temperature = temperature if temperature is not None else self.temperature
         
@@ -654,6 +813,9 @@ Required format:
                 self.total_cost += cost
                 self.request_count += 1
                 
+                # Update daily cost tracking
+                self._update_daily_cost(cost)
+                
                 self.logger.debug(
                     "xAI completion request successful",
                     model=model_to_use,
@@ -666,6 +828,11 @@ Required format:
                 return response_content, cost
                 
             except Exception as e:
+                # Check for resource exhausted errors first
+                if self._is_resource_exhausted_error(e):
+                    await self._handle_resource_exhausted_error(str(e))
+                    return None, 0.0
+                
                 # Check for specific gRPC error indicating deadline exceeded
                 is_deadline_error = "DEADLINE_EXCEEDED" in str(e)
                 
@@ -690,7 +857,7 @@ Required format:
                             return fallback_result
                     
                     self.logger.error(f"Error in get_completion: {str(e)}")
-                    raise
+                    return None, 0.0  # Return None instead of raising
                 
                 # Add delay before retry
                 await asyncio.sleep(2 ** attempt)
@@ -774,7 +941,7 @@ Required format:
     ) -> Optional[str]:
         """
         Get a simple completion from the AI model.
-        Returns the raw response text.
+        Returns the raw response text or None if failed/exhausted.
         """
         try:
             messages = [xai_user(prompt)]
@@ -783,6 +950,16 @@ Required format:
                 max_tokens=max_tokens, 
                 temperature=temperature
             )
+            
+            # Check if we got a None response (API exhausted or failed)
+            if response_content is None:
+                self.logger.info(
+                    "AI completion skipped due to API limits or exhaustion",
+                    strategy=strategy,
+                    query_type=query_type,
+                    market_id=market_id
+                )
+                return None
             
             # Log the query and response
             await self._log_query(

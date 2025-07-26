@@ -127,7 +127,7 @@ Focus on actionable insights that can immediately improve the trading system.
         try:
             response = await xai_client.get_completion(
                 prompt=analysis_prompt,
-                max_tokens=2000,
+                max_tokens=3000,
                 temperature=0.3
             )
             

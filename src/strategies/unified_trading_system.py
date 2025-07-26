@@ -477,22 +477,48 @@ class UnifiedAdvancedTradingSystem:
                         else:
                             self.logger.info(f"📊 {market_id} - New {intended_side} position")
                     
-                    # Calculate position size
-                    position_value = allocation_fraction * self.directional_capital
+                    # Calculate initial position size
+                    initial_position_value = allocation_fraction * self.directional_capital
                     
-                    # Check position limits before proceeding
+                    # Check position limits and adjust if needed
                     from src.utils.position_limits import check_can_add_position
                     
                     can_add_position, limit_reason = await check_can_add_position(
-                        position_value, self.db_manager, self.kalshi_client
+                        initial_position_value, self.db_manager, self.kalshi_client
                     )
                     
                     if not can_add_position:
-                        self.logger.info(f"❌ POSITION LIMITS BLOCK ALLOCATION: {market_id} - {limit_reason}")
-                        results['failed_executions'] += 1
-                        continue
+                        # Instead of blocking, try to find a smaller position size that fits
+                        self.logger.info(f"⚠️ Position size ${initial_position_value:.2f} exceeds limits, attempting to reduce...")
+                        
+                        # Try progressively smaller position sizes
+                        for reduction_factor in [0.8, 0.6, 0.4, 0.2, 0.1]:
+                            reduced_position_value = initial_position_value * reduction_factor
+                            can_add_reduced, reduced_reason = await check_can_add_position(
+                                reduced_position_value, self.db_manager, self.kalshi_client
+                            )
+                            
+                            if can_add_reduced:
+                                initial_position_value = reduced_position_value
+                                self.logger.info(f"✅ Position size reduced to ${initial_position_value:.2f} to fit limits")
+                                break
+                        else:
+                            # If even the smallest size doesn't fit, check if it's due to position count
+                            from src.utils.position_limits import PositionLimitsManager
+                            limits_manager = PositionLimitsManager(self.db_manager, self.kalshi_client)
+                            current_positions = await limits_manager._get_position_count()
+                            
+                            if current_positions >= limits_manager.max_positions:
+                                self.logger.info(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
+                                results['failed_executions'] += 1
+                                continue
+                            else:
+                                self.logger.info(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_value * 0.1:.2f} exceeds limits")
+                                results['failed_executions'] += 1
+                                continue
                     
-                    self.logger.info(f"✅ POSITION LIMITS OK FOR ALLOCATION: {market_id}")
+                    position_value = initial_position_value
+                    self.logger.info(f"✅ POSITION LIMITS OK FOR ALLOCATION: ${position_value:.2f}")
                     
                     # Check cash reserves for this allocation
                     from src.utils.cash_reserves import check_can_trade_with_cash_reserves

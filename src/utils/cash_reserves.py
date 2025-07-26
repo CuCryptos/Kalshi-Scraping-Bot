@@ -129,7 +129,8 @@ class CashReservesManager:
                 
             # Check 2: Trade size impact
             trade_impact_pct = (proposed_trade_value / portfolio_value) * 100 if portfolio_value > 0 else 0
-            if trade_impact_pct > self.max_single_trade_impact:
+            # Add small tolerance for floating point precision issues
+            if trade_impact_pct > (self.max_single_trade_impact + 0.01):
                 can_trade = False
                 reason = f"Trade impact {trade_impact_pct:.1f}% exceeds maximum {self.max_single_trade_impact:.1f}%"
                 recommendations.append(f"Reduce trade size to maximum ${portfolio_value * self.max_single_trade_impact / 100:.2f}")

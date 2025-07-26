@@ -424,7 +424,7 @@ Be concise and actionable. Focus on the top 3 priorities.
             messages = [xai_user(analysis_prompt)]
             response_content, cost = await self.xai_client._make_completion_request(
                 messages, 
-                max_tokens=2000,
+                max_tokens=3000,
                 temperature=0.3
             )
             

@@ -147,10 +147,12 @@ class BeastModeBot:
     async def _ensure_database_ready(self, db_manager: DatabaseManager):
         """Ensure database is fully initialized before starting any tasks."""
         try:
-            # FIXED: Use aiosqlite.connect directly like DatabaseManager does
+            # Initialize the database first to create all tables
+            await db_manager.initialize()
+            
+            # Verify tables exist by checking one of them
             import aiosqlite
             async with aiosqlite.connect(db_manager.db_path) as db:
-                # Verify tables exist by checking one of them
                 await db.execute("SELECT COUNT(*) FROM positions LIMIT 1")
                 await db.execute("SELECT COUNT(*) FROM markets LIMIT 1") 
                 await db.execute("SELECT COUNT(*) FROM trade_logs LIMIT 1")
@@ -179,6 +181,12 @@ class BeastModeBot:
         
         while not self.shutdown_event.is_set():
             try:
+                # Check daily AI cost limits before starting cycle
+                if not await self._check_daily_ai_limits(xai_client):
+                    # Sleep until next day if limits reached
+                    await self._sleep_until_next_day()
+                    continue
+                
                 cycle_count += 1
                 self.logger.info(f"🔄 Starting Beast Mode Trading Cycle #{cycle_count}")
                 
@@ -201,6 +209,60 @@ class BeastModeBot:
             except Exception as e:
                 self.logger.error(f"Error in trading cycle #{cycle_count}: {e}")
                 await asyncio.sleep(60)
+
+    async def _check_daily_ai_limits(self, xai_client: XAIClient) -> bool:
+        """
+        Check if we should continue trading based on daily AI cost limits.
+        Returns True if we can continue, False if we should pause.
+        """
+        if not settings.trading.enable_daily_cost_limiting:
+            return True
+        
+        # Check daily tracker in xAI client
+        if hasattr(xai_client, 'daily_tracker') and xai_client.daily_tracker.is_exhausted:
+            self.logger.warning(
+                "🚫 Daily AI cost limit reached - trading paused",
+                daily_cost=xai_client.daily_tracker.total_cost,
+                daily_limit=xai_client.daily_tracker.daily_limit,
+                requests_today=xai_client.daily_tracker.request_count
+            )
+            return False
+        
+        return True
+
+    async def _sleep_until_next_day(self):
+        """Sleep until the next day (midnight) when daily limits reset."""
+        if not settings.trading.sleep_when_limit_reached:
+            # Just sleep for a normal cycle if sleep is disabled
+            await asyncio.sleep(60)
+            return
+        
+        # Calculate time until next day
+        now = datetime.now()
+        next_day = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_until_next_day = (next_day - now).total_seconds()
+        
+        # Ensure we don't sleep for more than 24 hours (safety check)
+        max_sleep = 24 * 60 * 60  # 24 hours
+        sleep_time = min(seconds_until_next_day, max_sleep)
+        
+        if sleep_time > 0:
+            hours_to_sleep = sleep_time / 3600
+            self.logger.info(
+                f"💤 Sleeping until next day to reset AI limits - {hours_to_sleep:.1f} hours"
+            )
+            
+            # Sleep in chunks to allow for graceful shutdown
+            chunk_size = 300  # 5 minutes per chunk
+            while sleep_time > 0 and not self.shutdown_event.is_set():
+                current_chunk = min(chunk_size, sleep_time)
+                await asyncio.sleep(current_chunk)
+                sleep_time -= current_chunk
+            
+            self.logger.info("🌅 Daily AI limits reset - resuming trading")
+        else:
+            # Safety fallback
+            await asyncio.sleep(60)
 
     async def _run_position_tracking(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
         """Background task for position tracking and exit strategies."""

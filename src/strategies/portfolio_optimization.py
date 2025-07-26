@@ -958,41 +958,11 @@ async def _evaluate_immediate_trade(
         if not strong_opportunity:
             return  # Not strong enough for immediate action
         
-        # Check position limits before proceeding
+        # Check position limits and get maximum allowed position size
         from src.utils.position_limits import check_can_add_position
         
-        # Calculate rough position size to check limits
-        rough_position_size = 50  # Initial estimate for limit checking
-        can_add_position, limit_reason = await check_can_add_position(
-            rough_position_size, db_manager, kalshi_client
-        )
-        
-        if not can_add_position:
-            logger.info(f"❌ POSITION LIMITS BLOCK IMMEDIATE TRADE: {opportunity.market_id} - {limit_reason}")
-            return
-        
-        logger.info(f"✅ POSITION LIMITS OK FOR IMMEDIATE TRADE: {opportunity.market_id}")
-        
-        # Check if we already have a position in this market
-        import aiosqlite
-        async with aiosqlite.connect(db_manager.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM positions WHERE market_id = ?",
-                (opportunity.market_id,)
-            )
-            result = await cursor.fetchone()
-            position_count = result[0] if result else 0
-        
-        if position_count > 0:
-            logger.info(f"⏭️ Skipping immediate trade for {opportunity.market_id} - position already exists")
-            return
-        
-        # 🚀 STRONG OPPORTUNITY - TRADE IMMEDIATELY!
-        logger.info(f"🚀 IMMEDIATE TRADE: {opportunity.market_id} - Edge: {opportunity.edge:.1%}, Confidence: {opportunity.confidence:.1%}")
-        
-        # Get total portfolio value (cash + positions) from Kalshi
+        # Get portfolio value for position sizing
         try:
-            # Get available cash
             balance_response = await kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100  # Convert cents to dollars
             
@@ -1028,9 +998,7 @@ async def _evaluate_immediate_trade(
         except Exception as e:
             logger.warning(f"Could not get portfolio value, using available cash: {e}")
             total_portfolio_value = total_capital
-        
-        # 🚨 NEW APPROACH: Kelly-primary with safety cap
-        from src.config.settings import settings
+            available_cash = total_capital
         
         # Calculate Kelly-optimal position size
         kelly_fraction = _calculate_simple_kelly(opportunity)
@@ -1044,25 +1012,69 @@ async def _evaluate_immediate_trade(
         # Cash availability constraint
         cash_limit = available_cash * 0.8  # Don't use more than 80% of available cash
         
-        # Final position size: Kelly-optimal, but capped for safety and cash availability
-        position_size = min(
+        # Initial position size: Kelly-optimal, but capped for safety and cash availability
+        initial_position_size = min(
             kelly_position_size,  # Kelly-optimal size
-            safety_cap,          # Safety cap (15% max)
+            safety_cap,          # Safety cap (5% max)
             cash_limit           # Available cash constraint
         )
         
-        # Final position limits check with actual calculated size
-        can_add_final_position, final_limit_reason = await check_can_add_position(
-            position_size, db_manager, kalshi_client
+        # Check position limits with actual calculated size
+        can_add_position, limit_reason = await check_can_add_position(
+            initial_position_size, db_manager, kalshi_client
         )
         
-        if not can_add_final_position:
-            logger.info(f"❌ FINAL POSITION SIZE CHECK FAILED: {opportunity.market_id} - {final_limit_reason}")
+        if not can_add_position:
+            # Instead of blocking, try to find a smaller position size that fits
+            logger.info(f"⚠️ Position size ${initial_position_size:.2f} exceeds limits, attempting to reduce...")
+            
+            # Try progressively smaller position sizes
+            for reduction_factor in [0.8, 0.6, 0.4, 0.2, 0.1]:
+                reduced_position_size = initial_position_size * reduction_factor
+                can_add_reduced, reduced_reason = await check_can_add_position(
+                    reduced_position_size, db_manager, kalshi_client
+                )
+                
+                if can_add_reduced:
+                    initial_position_size = reduced_position_size
+                    logger.info(f"✅ Position size reduced to ${initial_position_size:.2f} to fit limits")
+                    break
+            else:
+                # If even the smallest size doesn't fit, check if it's due to position count
+                from src.utils.position_limits import PositionLimitsManager
+                limits_manager = PositionLimitsManager(db_manager, kalshi_client)
+                current_positions = await limits_manager._get_position_count()
+                
+                if current_positions >= limits_manager.max_positions:
+                    logger.info(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
+                    return
+                else:
+                    logger.info(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_size * 0.1:.2f} exceeds limits")
+                    return
+        
+        logger.info(f"✅ POSITION LIMITS OK FOR IMMEDIATE TRADE: ${initial_position_size:.2f}")
+        
+        # Check if we already have a position in this market
+        import aiosqlite
+        async with aiosqlite.connect(db_manager.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM positions WHERE market_id = ?",
+                (opportunity.market_id,)
+            )
+            result = await cursor.fetchone()
+            position_count = result[0] if result else 0
+        
+        if position_count > 0:
+            logger.info(f"⏭️ Skipping immediate trade for {opportunity.market_id} - position already exists")
             return
         
-        logger.info(f"💰 Kelly sizing: Edge={opportunity.edge:.1%}, Kelly=${kelly_position_size:.2f}, SafetyCap=${safety_cap:.2f}, CashLimit=${cash_limit:.2f}, Final=${position_size:.2f}")
-        logger.info(f"📊 Portfolio: ${total_portfolio_value:.2f}, Position as %: {(position_size/total_portfolio_value)*100:.1f}%")
-        logger.info(f"✅ FINAL POSITION LIMITS APPROVED: ${position_size:.2f}")
+        # 🚀 STRONG OPPORTUNITY - TRADE IMMEDIATELY!
+        logger.info(f"🚀 IMMEDIATE TRADE: {opportunity.market_id} - Edge: {opportunity.edge:.1%}, Confidence: {opportunity.confidence:.1%}")
+        
+        # Use the position size that was already calculated and validated above
+        position_size = initial_position_size
+        
+        logger.info(f"💰 Using validated position size: ${position_size:.2f}")
         
         # Final cash reserves check with actual calculated size
         from src.utils.cash_reserves import check_can_trade_with_cash_reserves
@@ -1224,20 +1236,43 @@ async def _get_fast_ai_prediction(
         """
         
         # Use AI analysis for portfolio optimization - higher tokens for reasoning models  
-        response = await xai_client.get_completion(
+        response_text = await xai_client.get_completion(
             prompt,
-            max_tokens=1500,  # Higher for reasoning models like grok-4
+            max_tokens=3000,  # Higher for reasoning models like grok-4
             temperature=0.1   # Low temperature for consistency
         )
         
-        if response and isinstance(response, dict):
-            probability = response.get('probability')
-            confidence = response.get('confidence')
+        # Check if AI response is None (API exhausted or failed)
+        if response_text is None:
+            logging.getLogger("portfolio_opportunities").info(f"AI analysis unavailable for {market.market_id} due to API limits")
+            return None, None
+        
+        # Parse JSON from the response text
+        try:
+            import json
+            import re
             
-            # Validate values
-            if (isinstance(probability, (int, float)) and 0 <= probability <= 1 and
-                isinstance(confidence, (int, float)) and 0 <= confidence <= 1):
-                return float(probability), float(confidence)
+            # Try to extract JSON from the response
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                response = json.loads(json_str)
+            else:
+                # If no JSON found, try to parse the entire response
+                response = json.loads(response_text)
+            
+            if response and isinstance(response, dict):
+                probability = response.get('probability')
+                confidence = response.get('confidence')
+                
+                # Validate values
+                if (isinstance(probability, (int, float)) and 0 <= probability <= 1 and
+                    isinstance(confidence, (int, float)) and 0 <= confidence <= 1):
+                    return float(probability), float(confidence)
+            
+        except (json.JSONDecodeError, ValueError) as json_error:
+            logging.getLogger("portfolio_opportunities").warning(f"Failed to parse JSON from AI response for {market.market_id}: {json_error}")
+            logging.getLogger("portfolio_opportunities").debug(f"Raw response: {response_text}")
         
         return None, None
         

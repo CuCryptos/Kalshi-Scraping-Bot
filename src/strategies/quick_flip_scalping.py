@@ -232,13 +232,22 @@ REASON: [brief explanation]
 
             response = await self.xai_client.get_completion(
                 prompt=prompt,
-                max_tokens=150,
+                max_tokens=3000,
                 strategy="quick_flip_scalping",
                 query_type="movement_prediction",
                 market_id=market.market_id
             )
             
-            # Parse response
+            # Check if AI response is None (API exhausted or failed)
+            if response is None:
+                self.logger.info(f"AI analysis unavailable for {market.market_id}, using conservative defaults")
+                return {
+                    'target_price': current_price + 2,  # Very conservative target
+                    'confidence': 0.2,  # Low confidence
+                    'reason': "AI analysis unavailable due to API limits"
+                }
+            
+            # Parse response safely
             lines = response.strip().split('\n')
             target_price = current_price * 2  # Default fallback
             confidence = 0.5

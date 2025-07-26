@@ -300,21 +300,54 @@ async def make_decision_for_market(
             # Calculate initial position size
             confidence_delta = decision.confidence - price
             initial_quantity = _calculate_dynamic_quantity(available_balance, price, confidence_delta)
-            proposed_position_value = initial_quantity * price
+            initial_position_value = initial_quantity * price
             
-            # Check if position can be added within limits
+            # Check if position can be added within limits and adjust if needed
             can_add_position, limit_reason = await check_can_add_position(
-                proposed_position_value, db_manager, kalshi_client
+                initial_position_value, db_manager, kalshi_client
             )
             
             if not can_add_position:
-                logger.info(f"❌ POSITION LIMITS EXCEEDED: {market.market_id} - {limit_reason}")
-                await db_manager.record_market_analysis(
-                    market.market_id, "POSITION_LIMITS", decision.confidence, total_analysis_cost, limit_reason
-                )
-                return None
+                # Instead of blocking, try to find a smaller position size that fits
+                logger.info(f"⚠️ Position size ${initial_position_value:.2f} exceeds limits, attempting to reduce...")
+                
+                # Try progressively smaller position sizes
+                for reduction_factor in [0.8, 0.6, 0.4, 0.2, 0.1]:
+                    reduced_position_value = initial_position_value * reduction_factor
+                    reduced_quantity = int(reduced_position_value / price)
+                    
+                    if reduced_quantity < 1:
+                        break  # Can't have less than 1 contract
+                    
+                    can_add_reduced, reduced_reason = await check_can_add_position(
+                        reduced_position_value, db_manager, kalshi_client
+                    )
+                    
+                    if can_add_reduced:
+                        initial_position_value = reduced_position_value
+                        initial_quantity = reduced_quantity
+                        logger.info(f"✅ Position size reduced to ${initial_position_value:.2f} ({initial_quantity} contracts) to fit limits")
+                        break
+                else:
+                    # If even the smallest size doesn't fit, check if it's due to position count
+                    from src.utils.position_limits import PositionLimitsManager
+                    limits_manager = PositionLimitsManager(db_manager, kalshi_client)
+                    current_positions = await limits_manager._get_position_count()
+                    
+                    if current_positions >= limits_manager.max_positions:
+                        logger.info(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
+                        await db_manager.record_market_analysis(
+                            market.market_id, "POSITION_LIMITS", decision.confidence, total_analysis_cost, "Position count limit reached"
+                        )
+                        return None
+                    else:
+                        logger.info(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_value * 0.1:.2f} exceeds limits")
+                        await db_manager.record_market_analysis(
+                            market.market_id, "POSITION_LIMITS", decision.confidence, total_analysis_cost, "Position size limit exceeded"
+                        )
+                        return None
             
-            logger.info(f"✅ POSITION LIMITS OK: {market.market_id} - {limit_reason}")
+            logger.info(f"✅ POSITION LIMITS OK: ${initial_position_value:.2f} ({initial_quantity} contracts)")
             
             # Check cash reserves before proceeding with trade
             from src.utils.cash_reserves import check_can_trade_with_cash_reserves
