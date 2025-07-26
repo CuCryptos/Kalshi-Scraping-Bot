@@ -2,6 +2,18 @@
 
 A sophisticated, multi-agent AI-powered trading system for Kalshi prediction markets. This system uses advanced LLM reasoning, portfolio optimization, and real-time market analysis to make intelligent trading decisions.
 
+## ⚠️ **IMPORTANT DISCLAIMER**
+
+**This is experimental software for educational and research purposes only.**
+
+- **Trading involves substantial risk of loss**
+- **Only trade with capital you can afford to lose**
+- **Past performance does not guarantee future results**
+- **This software is not financial advice**
+- **Use at your own risk**
+
+The authors are not responsible for any financial losses incurred through the use of this software.
+
 ## 🚀 Features
 
 ### Core Trading System
