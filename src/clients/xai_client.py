@@ -98,6 +98,33 @@ class XAIClient(TradingLoggerMixin):
         
         # Ensure logs directory exists
         os.makedirs("logs", exist_ok=True)
+
+        # --- START OF FIX ---
+        # ALWAYS get the current limit from the main settings file.
+        current_limit = getattr(settings.trading, 'daily_ai_cost_limit', 50.0)
+        
+        try:
+            if os.path.exists(usage_file):
+                with open(usage_file, 'rb') as f:
+                    tracker = pickle.load(f)
+                
+                # If it's a new day, create a fresh tracker with the current limit.
+                if tracker.date != today:
+                    self.logger.info("New day detected. Resetting AI usage tracker.")
+                    return DailyUsageTracker(date=today, daily_limit=current_limit)
+                
+                # If it's the same day, just update the limit to the current value.
+                tracker.daily_limit = current_limit
+                return tracker
+        except Exception as e:
+            self.logger.warning(f"Failed to load daily tracker: {e}")
+        
+        # If no file exists or there was an error, create a new tracker.
+        return DailyUsageTracker(date=today, daily_limit=current_limit)
+        # --- END OF FIX ---
+        
+        # Ensure logs directory exists
+        os.makedirs("logs", exist_ok=True)
         
         try:
             if os.path.exists(usage_file):

@@ -77,14 +77,14 @@ class TradingConfig:
     min_confidence_threshold: float = 0.45  # DECREASED: Lower confidence threshold (was 0.55, now 0.45)
 
     # Cost control and market analysis frequency - MORE PERMISSIVE
-    daily_ai_budget: float = 10.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
-    max_ai_cost_per_decision: float = 0.08  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
+    daily_ai_budget: float = 20.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
+    max_ai_cost_per_decision: float = 0.13  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
     analysis_cooldown_hours: int = 3  # DECREASED: Shorter cooldown (was 6, now 3)
     max_analyses_per_market_per_day: int = 4  # INCREASED: More analyses per day (was 2, now 4)
     
     # Daily AI spending limits - SAFETY CONTROLS
-    daily_ai_cost_limit: float = 50.0  # Maximum daily spending on AI API calls (USD)
-    enable_daily_cost_limiting: bool = True  # Enable daily cost limits
+    daily_ai_cost_limit: float = 99999.0  # Maximum daily spending on AI API calls (USD)
+    enable_daily_cost_limiting: bool = False  # Enable daily cost limits
     sleep_when_limit_reached: bool = True  # Sleep until next day when limit reached
 
     # Enhanced market filtering to reduce analyses - MORE PERMISSIVE
