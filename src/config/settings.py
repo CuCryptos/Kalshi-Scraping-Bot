@@ -33,7 +33,7 @@ class TradingConfig:
     min_balance: float = 50.0           # REDUCED: Lower minimum to trade more (was 100)
     
     # Market filtering criteria - MUCH MORE PERMISSIVE
-    min_volume: float = 200.0            # DECREASED: Much lower volume requirement (was 500, now 200)
+    min_volume: float = 1500.0            # DECREASED: Much lower volume requirement (was 500, now 200)
     max_time_to_expiry_days: int = 30    # INCREASED: Allow longer timeframes (was 14, now 30)
     
     # AI decision making - MORE AGGRESSIVE THRESHOLDS
@@ -56,10 +56,10 @@ class TradingConfig:
     max_single_position: float = 0.05       # INCREASED: Higher position cap (was 0.03, now 5%)
     
     # Trading frequency - MORE FREQUENT
-    market_scan_interval: int = 30          # DECREASED: Scan every 30 seconds (was 60)
+    market_scan_interval: int = 300          # DECREASED: Scan every 30 seconds (was 60)
     position_check_interval: int = 15       # DECREASED: Check positions every 15 seconds (was 30)
     max_trades_per_hour: int = 20           # INCREASED: Allow more trades per hour (was 10, now 20)
-    run_interval_minutes: int = 10          # DECREASED: Run more frequently (was 15, now 10)
+    run_interval_minutes: int = 15          # DECREASED: Run more frequently (was 15, now 10)
     num_processor_workers: int = 5      # Number of concurrent market processor workers
     
     # Market selection preferences
@@ -73,14 +73,14 @@ class TradingConfig:
     high_confidence_expiry_hours: int = 24   # Max hours until expiry
 
     # AI trading criteria - MORE PERMISSIVE
-    max_analysis_cost_per_decision: float = 0.15  # INCREASED: Allow higher cost per decision (was 0.10, now 0.15)
+    max_analysis_cost_per_decision: float = 0.12  # INCREASED: Allow higher cost per decision (was 0.10, now 0.15)
     min_confidence_threshold: float = 0.45  # DECREASED: Lower confidence threshold (was 0.55, now 0.45)
 
     # Cost control and market analysis frequency - MORE PERMISSIVE
     daily_ai_budget: float = 20.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
     max_ai_cost_per_decision: float = 0.13  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
     analysis_cooldown_hours: int = 3  # DECREASED: Shorter cooldown (was 6, now 3)
-    max_analyses_per_market_per_day: int = 4  # INCREASED: More analyses per day (was 2, now 4)
+    max_analyses_per_market_per_day: int = 2  # INCREASED: More analyses per day (was 2, now 4)
     
     # Daily AI spending limits - SAFETY CONTROLS
     daily_ai_cost_limit: float = 99999.0  # Maximum daily spending on AI API calls (USD)
