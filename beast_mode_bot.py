@@ -43,7 +43,7 @@ from beast_mode_dashboard import BeastModeDashboard
 
 # Imports for new Scalp Mode
 from src.clients.kalshi_client import KalshiClient
-# Refactored to import the new specific functions from the scalp module
+# --- UPDATED IMPORTS FOR SPORTSDATA.IO ---
 from src.jobs.scalp import run_data_streamer, trade_executor
 
 
@@ -55,16 +55,16 @@ def get_strategy_for_market(market_title: str) -> str | None:
     """
     title = market_title.lower()
     
-    # Define keywords for each strategy. You can easily add more here!
     strategy_keywords = {
         'sports_play_by_play': [
-            'match',           # Catches Tennis, etc.
-            'wins by over',    # Catches Football point spreads
-            'points scored'    # Catches Over/Under markets
+            'match',
+            'wins by over',
+            'points scored',
+            'nba' # Added NBA to catch those specific markets
         ],
         'financial_events': [
-            'earnings call',   # Catches the Costco market
-            'eur/usd'          # Catches Forex markets
+            'earnings call',
+            'eur/usd'
         ]
     }
 
@@ -80,15 +80,11 @@ async def run_master_scalper_mode():
     The main orchestrator that launches ONE data streamer and MANY trade executors.
     """
     logger = get_trading_logger("master_scalper")
-    
-    # A single, shared queue for all tasks to communicate
     data_queue = asyncio.Queue()
     
-    # --- Launch ONE data streamer for sports ---
-    # This connects to The Odds API and feeds the shared queue.
-    # You can launch more streamers here for different sports or data sources.
-    logger.info("🚀 Launching master data streamer for basketball...")
-    asyncio.create_task(run_data_streamer(data_queue, 'basketball_nba'))
+    # --- UPDATED TO LAUNCH SPORTSDATA.IO STREAMER ---
+    logger.info("🚀 Launching master data streamer using SportsData.io...")
+    asyncio.create_task(run_data_streamer(data_queue, 'nba'))
     
     active_executors = {}
     
@@ -96,6 +92,8 @@ async def run_master_scalper_mode():
     while True:
         try:
             async with KalshiClient() as kalshi_client:
+                # Use current date for SportsData.io compatibility in scalp.py
+                current_date_str = datetime.now().strftime('%Y-%b-%d').upper()
                 markets_response = await kalshi_client.get_markets(status="open")
                 active_markets = markets_response.get('markets', [])
 
@@ -105,16 +103,11 @@ async def run_master_scalper_mode():
                     if market_id not in active_executors:
                         strategy = get_strategy_for_market(market['title'])
                         
-                        # Only launch executors for the strategies we have a data stream for
                         if strategy == 'sports_play_by_play':
                             logger.info(f"✅ Found scalpable market: '{market['title']}'. Launching executor.")
-                            
-                            # Launch a dedicated trade executor for this market,
-                            # listening to the SHARED data queue.
                             task = asyncio.create_task(trade_executor(data_queue, market, kalshi_client))
                             active_executors[market_id] = task
             
-            # Clean up any finished executor tasks
             finished_tasks = {mid for mid, task in active_executors.items() if task.done()}
             for mid in finished_tasks:
                 logger.info(f"Executor task for {mid} has finished.")
