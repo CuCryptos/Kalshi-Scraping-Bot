@@ -1,6 +1,7 @@
 """
 Kalshi API client for trading operations.
 Handles authentication, market data, and trade execution.
+Optimized for low-latency scalping by removing proactive delays.
 """
 
 import asyncio
@@ -179,8 +180,10 @@ class KalshiClient(TradingLoggerMixin):
                     attempt=attempt + 1
                 )
                 
-                # Add aggressive delay between requests to prevent 429s
-                await asyncio.sleep(0.5)  # 500ms delay = max 2 requests/second
+                # --- CRITICAL CHANGE FOR SCALPING ---
+                # The proactive 500ms delay has been REMOVED.
+                # The bot will now send requests as fast as possible.
+                # The retry logic below will handle rate limits reactively.
                 
                 response = await self.client.request(
                     method=method,
@@ -427,4 +430,4 @@ class KalshiClient(TradingLoggerMixin):
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
-        await self.close() 
+        await self.close()
