@@ -3,10 +3,11 @@
 import requests
 import asyncio
 from asyncio import Queue
+from datetime import datetime
 from src.utils.logging_setup import get_trading_logger
 
-# IMPORTANT: Add your API Key here
-SPORTSDATA_API_KEY = "f43641c1d2ed44238564427ba6b50a99"
+# IMPORTANT: Make sure your API Key is correct
+SPORTSDATA_API_KEY = "YOUR_SPORTSDATA_API_KEY_HERE"
 
 class SportsDataClient:
     """
@@ -17,14 +18,15 @@ class SportsDataClient:
         self.base_url = "https://api.sportsdata.io/v3"
         self.logger = get_trading_logger("sportsdata_client")
 
-    def get_live_games_for_sport(self, sport: str = 'nba') -> list:
+    def get_live_games_for_sport(self, sport: str = 'mlb') -> list:
         """
-        Fetches all games that are currently in-progress.
-        NOTE: This is a synchronous function.
+        Fetches all games for the current date and filters for those in-progress.
         """
-        # This endpoint gets all scores for the current day.
-        # We will filter for only live games.
-        url = f"{self.base_url}/{sport}/scores/json/GamesByDate/2025-SEP-19" # Use current date
+        # --- DYNAMIC DATE LOGIC ---
+        # This now uses the current date every time it's called.
+        current_date_str = datetime.now().strftime('%Y-%m-%d')
+        
+        url = f"{self.base_url}/{sport}/scores/json/GamesByDate/{current_date_str}"
         try:
             response = requests.get(url, params={"key": self.api_key})
             response.raise_for_status()
@@ -40,7 +42,7 @@ class SportsDataClient:
             self.logger.error(f"Error fetching live games: {e}")
             return []
 
-    async def poll_for_updates(self, data_queue: Queue, sport: str = 'nba'):
+    async def poll_for_updates(self, data_queue: Queue, sport: str = 'mlb'):
         """
         Polls the API at a high frequency to simulate a real-time stream.
         """
@@ -52,4 +54,4 @@ class SportsDataClient:
                 await data_queue.put({"type": "update", "games": live_games})
             
             # Poll every few seconds. Be mindful of your API plan's rate limits.
-            await asyncio.sleep(5) # Poll every 5 seconds
+            await asyncio.sleep(10) # Using a slightly safer 10-second poll
